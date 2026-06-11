@@ -11,17 +11,27 @@ This skill gives Claude Code authenticated access to Google Search Console and G
 
 ## Authentication
 
-The API key lives in the `REFRESHAGENT_API_KEY` environment variable.
+The API key is read from `REFRESHAGENT_API_KEY` (env var) or `~/.config/refreshagent/.env` (persistent config). The config file is the recommended approach — it survives shell restarts and is checked automatically:
+
+```bash
+# One-time setup — survives restarts
+echo 'REFRESHAGENT_API_KEY="ra_live_..."' > ~/.config/refreshagent/.env
+```
+
+The bundled Python helper checks both locations. If you need to override for a single session, set the env var:
 
 ```bash
 export REFRESHAGENT_API_KEY="ra_live_..."
+python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/sc/sites
 ```
 
-**If the key is missing:** guide the user to authenticate:
+**If neither source has a key:** guide the user to authenticate:
 
-1. Run `npx refresh-agent --key ra_live_...` in their terminal to install the connection badge
-2. Or visit https://refreshagent.com/auth/cli to generate a key
-3. Once they have a key, ask them to export it: `export REFRESHAGENT_API_KEY="ra_live_..."`
+1. Run `npx refresh-agent --key ra_live_...` in their terminal (writes the key to `~/.config/refreshagent/.env` automatically)
+2. Or visit https://refreshagent.com/auth/cli to generate a key, then save it with:
+   ```bash
+   mkdir -p ~/.config/refreshagent && echo 'REFRESHAGENT_API_KEY="ra_live_..."' > ~/.config/refreshagent/.env
+   ```
 
 Never ask the user to paste API keys into chat. Never save keys in skill files, repositories, or example output.
 

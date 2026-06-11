@@ -40,6 +40,25 @@ def load_body(raw_json: str | None) -> bytes | None:
     return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
 
 
+CONFIG_FILE = os.path.expanduser("~/.config/refreshagent/.env")
+
+
+def load_api_key() -> str | None:
+    key = os.environ.get("REFRESHAGENT_API_KEY")
+    if key:
+        return key
+    try:
+        with open(CONFIG_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("REFRESHAGENT_API_KEY="):
+                    raw = line.split("=", 1)[1].strip()
+                    return raw.strip("\"'")
+    except (FileNotFoundError, OSError):
+        pass
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Call RefreshAgent API endpoints.")
     parser.add_argument("method", choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
@@ -47,11 +66,11 @@ def main() -> int:
     parser.add_argument("--param", action="append", default=[], type=parse_key_value, help="Query parameter as KEY=VALUE")
     parser.add_argument("--json", dest="json_body", help="JSON request body for POST/PUT/PATCH")
     parser.add_argument("--base-url", default=os.environ.get("REFRESHAGENT_BASE_URL", "https://refreshagent.com"))
-    parser.add_argument("--api-key", default=os.environ.get("REFRESHAGENT_API_KEY"))
+    parser.add_argument("--api-key", default=load_api_key())
     args = parser.parse_args()
 
     if not args.api_key:
-        print("Missing API key. Set REFRESHAGENT_API_KEY or pass --api-key.", file=sys.stderr)
+        print(f"Missing API key. Set REFRESHAGENT_API_KEY, create {CONFIG_FILE}, or pass --api-key.", file=sys.stderr)
         return 2
 
     body = load_body(args.json_body)
