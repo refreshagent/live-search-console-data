@@ -1,0 +1,4 @@
+interface:
+  display_name: "Live Search Console Data"
+  short_description: "Query Google Search Console and GA4 data through RefreshAgent"
+  default_prompt: "Use $live-search-console-data to inspect Search Console or GA4 metrics through RefreshAgent."

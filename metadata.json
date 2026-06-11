@@ -1,0 +1,9 @@
+{
+  "name": "live-search-console-data",
+  "description": "Give Claude Code live access to Google Search Console and GA4 data through RefreshAgent. No GCP setup required.",
+  "agents": ["claude-code", "codex", "cursor", "github-copilot", "opencode", "windsurf"],
+  "tags": ["seo", "google-search-console", "ga4", "analytics", "marketing", "refreshagent"],
+  "categories": ["marketing", "data-access"],
+  "homepage": "https://refreshagent.com",
+  "source": "https://github.com/refreshagent/live-search-console-data"
+}
