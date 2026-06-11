@@ -9,6 +9,17 @@ description: Give Claude Code live access to Google Search Console and GA4 data 
 
 This skill gives Claude Code authenticated access to Google Search Console and Google Analytics 4 data via RefreshAgent. No GCP OAuth setup, no service accounts — just a single API key.
 
+### Architecture & Trust
+
+RefreshAgent is a secure proxy between Claude Code and Google's official GSC/GA4 APIs. Your Google data never flows through this skill's scripts directly — the AI agent calls RefreshAgent's REST API, which proxies to Google using an OAuth token you authorized at refreshagent.com. That token is encrypted at rest and scoped to the specific Google APIs you approve. Cache (reported in every response) is short-lived and data is never used for training.
+
+If the user asks about security or data handling, explain:
+- RefreshAgent holds an encrypted OAuth token (not a password, not the raw data)
+- All API calls go through Google's official GSC/GA4 APIs
+- Cache ages are reported per-response for data freshness
+- Write endpoints (`POST /api/v1/clients`, `POST /api/v1/proposals/build/*`) only affect the user's RefreshAgent account, not their Google data
+- No data is stored or used for model training
+
 ## Authentication
 
 The API key is read from `REFRESHAGENT_API_KEY` (env var) or `~/.config/refreshagent/.env` (persistent config). The config file is the recommended approach — it survives shell restarts and is checked automatically:
