@@ -7,10 +7,17 @@ import argparse
 import json
 import os
 import sys
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
+
+CONFIG_DIR = Path.home() / ".config" / "refreshagent"
+CONFIG_FILE = CONFIG_DIR / ".env"
 
 
 def parse_key_value(value: str) -> tuple[str, str]:
@@ -40,23 +47,107 @@ def load_body(raw_json: str | None) -> bytes | None:
     return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
 
 
-CONFIG_FILE = os.path.expanduser("~/.config/refreshagent/.env")
-
-
-def load_api_key() -> str | None:
-    key = os.environ.get("REFRESHAGENT_API_KEY")
-    if key:
-        return key
+def load_config_api_key() -> str | None:
+    if not CONFIG_FILE.exists():
+        return None
     try:
-        with open(CONFIG_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("REFRESHAGENT_API_KEY="):
-                    raw = line.split("=", 1)[1].strip()
-                    return raw.strip("\"'")
-    except (FileNotFoundError, OSError):
-        pass
+        for line in CONFIG_FILE.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() == "REFRESHAGENT_API_KEY":
+                return value.strip().strip('"').strip("'") or None
+    except OSError:
+        return None
     return None
+
+
+def save_config_api_key(api_key: str, base_url: str) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(
+        "\n".join(
+            [
+                f'REFRESHAGENT_API_KEY="{api_key}"',
+                f'REFRESHAGENT_BASE_URL="{base_url.rstrip("/")}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+
+class CliCallbackHandler(BaseHTTPRequestHandler):
+    server_version = "RefreshAgentCliAuth/1.0"
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        return
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/callback":
+            self.send_error(404)
+            return
+
+        params = parse_qs(parsed.query)
+        api_key = (params.get("key") or [""])[0]
+        base_url = (params.get("base_url") or ["https://refreshagent.com"])[0]
+        if not api_key.startswith("ra_live_"):
+            self.send_error(400, "Missing RefreshAgent key")
+            return
+
+        self.server.api_key = api_key  # type: ignore[attr-defined]
+        self.server.base_url = base_url  # type: ignore[attr-defined]
+        body = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>RefreshAgent connected</title>"
+            "<style>body{font-family:system-ui,sans-serif;max-width:680px;margin:12vh auto;"
+            "line-height:1.5;color:#17211c}code{background:#f3f4f6;padding:.2rem .4rem;"
+            "border-radius:4px}</style>"
+            "<h1>RefreshAgent is connected.</h1>"
+            "<p>Your secure key was saved locally. You can close this tab and return to Claude Code.</p>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+
+def run_cli_login(base_url: str) -> str:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), CliCallbackHandler)
+    server.api_key = ""  # type: ignore[attr-defined]
+    server.base_url = base_url  # type: ignore[attr-defined]
+    callback_url = f"http://127.0.0.1:{server.server_port}/callback"
+    auth_url = build_url(base_url, "/auth/cli", [("callback", callback_url)])
+
+    print("RefreshAgent needs Google access before it can query SEO data.", file=sys.stderr)
+    print(f"Opening login page: {auth_url}", file=sys.stderr)
+    print("After Google sign-in, this command will save the key and continue.", file=sys.stderr)
+    try:
+        webbrowser.open(auth_url)
+    except Exception:
+        pass
+
+    server.timeout = 300
+    server.handle_request()
+    api_key = getattr(server, "api_key", "")
+    returned_base_url = getattr(server, "base_url", base_url)
+    server.server_close()
+
+    if not api_key:
+        raise SystemExit(
+            "Login timed out. Run this command again and complete the browser sign-in."
+        )
+
+    save_config_api_key(api_key, returned_base_url)
+    print(f"Saved RefreshAgent key to {CONFIG_FILE}", file=sys.stderr)
+    return api_key
 
 
 def main() -> int:
@@ -66,12 +157,12 @@ def main() -> int:
     parser.add_argument("--param", action="append", default=[], type=parse_key_value, help="Query parameter as KEY=VALUE")
     parser.add_argument("--json", dest="json_body", help="JSON request body for POST/PUT/PATCH")
     parser.add_argument("--base-url", default=os.environ.get("REFRESHAGENT_BASE_URL", "https://refreshagent.com"))
-    parser.add_argument("--api-key", default=load_api_key())
+    parser.add_argument("--api-key", default=os.environ.get("REFRESHAGENT_API_KEY") or load_config_api_key())
+    parser.add_argument("--login", action="store_true", help="Start browser login and save the RefreshAgent key locally.")
     args = parser.parse_args()
 
-    if not args.api_key:
-        print(f"Missing API key. Set REFRESHAGENT_API_KEY, create {CONFIG_FILE}, or pass --api-key.", file=sys.stderr)
-        return 2
+    if args.login or not args.api_key:
+        args.api_key = run_cli_login(args.base_url)
 
     body = load_body(args.json_body)
     url = build_url(args.base_url, args.path, args.param)

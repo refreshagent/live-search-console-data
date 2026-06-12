@@ -14,7 +14,9 @@ npx skills add refreshagent/live-search-console-data
 
 ## How to Authenticate
 
-After installing, ask Claude about your search traffic. The skill will detect that you need to authenticate and provide a secure link to connect your Google account at refreshagent.com. One click, and Claude has live data.
+After installing, ask Claude about your search traffic. The skill detects missing authentication, opens a secure RefreshAgent Google login page in your browser, saves the local key automatically, and then continues the request.
+
+No manual `.env` editing is required in the normal flow.
 
 ## What You Can Ask
 
@@ -31,11 +33,13 @@ This skill connects Claude Code to the RefreshAgent API, which acts as a secure 
 
 ### Data Flow & Trust Model
 
-1. **You authenticate with Google** via refreshagent.com's OAuth flow — same Google permissions as granting access to any third-party tool (e.g., Semrush, Ahrefs).
-2. **RefreshAgent stores an encrypted OAuth token** — not your Google password, not your data. The token is scoped to the GSC/GA4 APIs you authorize.
-3. **The AI agent calls RefreshAgent's API** using your API key (`ra_live_...`). RefreshAgent proxies the request to Google's official APIs using your stored token.
-4. **Data is cached briefly** (seconds to minutes) to avoid redundant API calls. Cache age is reported in every response.
-5. **No data leaves RefreshAgent for training.** Responses are ephemeral — they exist only in the agent's context window.
+1. **Claude starts the helper** when it needs live GSC or GA4 data.
+2. **You authenticate with Google** via refreshagent.com's OAuth flow in your browser.
+3. **RefreshAgent stores an encrypted OAuth token**: not your Google password, not your data. The token is scoped to the GSC/GA4 APIs you authorize.
+4. **The helper saves a local RefreshAgent key** to `~/.config/refreshagent/.env` so future Claude Code sessions work without repeating setup.
+5. **The AI agent calls RefreshAgent's API** using your API key (`ra_live_...`). RefreshAgent proxies the request to Google's official APIs using your stored token.
+6. **Data is cached briefly** (seconds to minutes) to avoid redundant API calls. Cache age is reported in every response.
+7. **No data leaves RefreshAgent for training.** Responses are ephemeral: they exist only in the agent's context window.
 
 This is the same architecture used by every SEO tool that offers Google data integration — we handle the OAuth boilerplate so you don't have to configure a GCP project, set up a service account, or manage token refreshes.
 

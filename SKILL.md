@@ -7,7 +7,7 @@ description: Give Claude Code live access to Google Search Console and GA4 data 
 
 ## Overview
 
-This skill gives Claude Code authenticated access to Google Search Console and Google Analytics 4 data via RefreshAgent. No GCP OAuth setup, no service accounts — just a single API key.
+This skill gives Claude Code authenticated access to Google Search Console and Google Analytics 4 data via RefreshAgent. No GCP OAuth setup, no service accounts, and no manual key copying in normal use.
 
 ### Architecture & Trust
 
@@ -22,27 +22,22 @@ If the user asks about security or data handling, explain:
 
 ## Authentication
 
-The API key is read from `REFRESHAGENT_API_KEY` (env var) or `~/.config/refreshagent/.env` (persistent config). The config file is the recommended approach — it survives shell restarts and is checked automatically:
+The bundled Python helper reads the API key from `REFRESHAGENT_API_KEY` (env var) or `~/.config/refreshagent/.env` (persistent config). If neither source has a key, the helper starts a localhost callback, opens the RefreshAgent Google login page, saves the returned key to `~/.config/refreshagent/.env`, and then continues the original API request.
 
-```bash
-# One-time setup — survives restarts
-echo 'REFRESHAGENT_API_KEY="ra_live_..."' > ~/.config/refreshagent/.env
-```
-
-The bundled Python helper checks both locations. If you need to override for a single session, set the env var:
+If you need to override for a single session, set the env var:
 
 ```bash
 export REFRESHAGENT_API_KEY="ra_live_..."
 python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/sc/sites
 ```
 
-**If neither source has a key:** guide the user to authenticate:
+**If neither source has a key:** run the helper normally. It will open browser login automatically:
 
-1. Run `npx refresh-agent --key ra_live_...` in their terminal (writes the key to `~/.config/refreshagent/.env` automatically)
-2. Or visit https://refreshagent.com/auth/cli to generate a key, then save it with:
-   ```bash
-   mkdir -p ~/.config/refreshagent && echo 'REFRESHAGENT_API_KEY="ra_live_..."' > ~/.config/refreshagent/.env
-   ```
+```bash
+python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/sc/sites
+```
+
+Tell the user to complete the Google sign-in page that opens in their browser and return to Claude Code. Do not ask them to quit Claude Code, manually run shell setup commands, or paste API keys into chat unless browser login is unavailable.
 
 Never ask the user to paste API keys into chat. Never save keys in skill files, repositories, or example output.
 
@@ -52,6 +47,12 @@ Use the bundled Python helper for authenticated REST calls:
 
 ```bash
 python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/sc/sites
+```
+
+To force setup without making a separate decision first:
+
+```bash
+python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/clients --login
 ```
 
 Examples:
