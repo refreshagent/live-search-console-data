@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 import threading
 import webbrowser
@@ -94,10 +95,19 @@ class CliCallbackHandler(BaseHTTPRequestHandler):
             return
 
         params = parse_qs(parsed.query)
-        api_key = (params.get("key") or [""])[0]
+        expected_state = getattr(self.server, "expected_state", "")  # type: ignore[attr-defined]
+        state = (params.get("state") or [""])[0]
+        if expected_state and not secrets.compare_digest(state, expected_state):
+            self.send_error(400, "Invalid login callback state")
+            return
+
+        api_key = (params.get("key") or [""])[0].strip()
         base_url = (params.get("base_url") or ["https://refreshagent.com"])[0]
-        if not api_key.startswith("ra_live_"):
+        if not api_key:
             self.send_error(400, "Missing RefreshAgent key")
+            return
+        if any(char in api_key for char in "\r\n\t "):
+            self.send_error(400, "Invalid RefreshAgent key")
             return
 
         self.server.api_key = api_key  # type: ignore[attr-defined]
@@ -123,7 +133,11 @@ def run_cli_login(base_url: str) -> str:
     server = ThreadingHTTPServer(("127.0.0.1", 0), CliCallbackHandler)
     server.api_key = ""  # type: ignore[attr-defined]
     server.base_url = base_url  # type: ignore[attr-defined]
-    callback_url = f"http://127.0.0.1:{server.server_port}/callback"
+    server.expected_state = secrets.token_urlsafe(24)  # type: ignore[attr-defined]
+    callback_url = (
+        f"http://127.0.0.1:{server.server_port}/callback"
+        f"?state={server.expected_state}"  # type: ignore[attr-defined]
+    )
     auth_url = build_url(base_url, "/auth/cli", [("callback", callback_url)])
 
     print("RefreshAgent needs Google access before it can query SEO data.", file=sys.stderr)
@@ -181,6 +195,17 @@ def main() -> int:
             payload = response.read().decode("utf-8")
     except HTTPError as exc:
         error_payload = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 402:
+            try:
+                parsed_error = json.loads(error_payload)
+            except json.JSONDecodeError:
+                parsed_error = {}
+            message = parsed_error.get("error") or "Free Google data request limit reached."
+            upgrade_url = parsed_error.get("upgrade_url")
+            print(message, file=sys.stderr)
+            if upgrade_url:
+                print(f"Upgrade to Live Data: {upgrade_url}", file=sys.stderr)
+            return 1
         print(f"HTTP {exc.code} {exc.reason}: {error_payload}", file=sys.stderr)
         return 1
     except URLError as exc:
