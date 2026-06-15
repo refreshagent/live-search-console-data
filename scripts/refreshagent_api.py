@@ -9,6 +9,7 @@ import os
 import secrets
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +20,10 @@ from urllib.request import Request, urlopen
 
 CONFIG_DIR = Path.home() / ".config" / "refreshagent"
 CONFIG_FILE = CONFIG_DIR / ".env"
+LOGIN_LOCK_DIR = CONFIG_DIR / ".login.lock"
+LOGIN_WAIT_SECONDS = 600
+LOGIN_LOCK_STALE_SECONDS = 900
+LOGIN_WAIT_POLL_SECONDS = 1.0
 
 
 def parse_key_value(value: str) -> tuple[str, str]:
@@ -82,6 +87,48 @@ def save_config_api_key(api_key: str, base_url: str) -> None:
         pass
 
 
+def acquire_login_lock() -> bool:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            LOGIN_LOCK_DIR.mkdir()
+            (LOGIN_LOCK_DIR / "pid").write_text(str(os.getpid()), encoding="utf-8")
+            return True
+        except FileExistsError:
+            try:
+                age = time.time() - LOGIN_LOCK_DIR.stat().st_mtime
+            except OSError:
+                age = 0
+            if age > LOGIN_LOCK_STALE_SECONDS:
+                release_login_lock()
+                continue
+            return False
+
+
+def release_login_lock() -> None:
+    try:
+        (LOGIN_LOCK_DIR / "pid").unlink(missing_ok=True)
+        LOGIN_LOCK_DIR.rmdir()
+    except OSError:
+        pass
+
+
+def wait_for_login_owner() -> str | None:
+    deadline = time.monotonic() + LOGIN_WAIT_SECONDS
+    print(
+        "Another RefreshAgent login is already in progress. Waiting for it to finish...",
+        file=sys.stderr,
+    )
+    while time.monotonic() < deadline:
+        api_key = load_config_api_key()
+        if api_key:
+            return api_key
+        if not LOGIN_LOCK_DIR.exists():
+            return load_config_api_key()
+        time.sleep(LOGIN_WAIT_POLL_SECONDS)
+    return None
+
+
 class CliCallbackHandler(BaseHTTPRequestHandler):
     server_version = "RefreshAgentCliAuth/1.0"
 
@@ -130,38 +177,77 @@ class CliCallbackHandler(BaseHTTPRequestHandler):
 
 
 def run_cli_login(base_url: str) -> str:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), CliCallbackHandler)
-    server.api_key = ""  # type: ignore[attr-defined]
-    server.base_url = base_url  # type: ignore[attr-defined]
-    server.expected_state = secrets.token_urlsafe(24)  # type: ignore[attr-defined]
-    callback_url = (
-        f"http://127.0.0.1:{server.server_port}/callback"
-        f"?state={server.expected_state}"  # type: ignore[attr-defined]
-    )
-    auth_url = build_url(base_url, "/auth/cli", [("callback", callback_url)])
+    existing_key = load_config_api_key()
+    if existing_key:
+        return existing_key
 
-    print("RefreshAgent needs Google access before it can query SEO data.", file=sys.stderr)
-    print(f"Opening login page: {auth_url}", file=sys.stderr)
-    print("After Google sign-in, this command will save the key and continue.", file=sys.stderr)
-    try:
-        webbrowser.open(auth_url)
-    except Exception:
-        pass
-
-    server.timeout = 300
-    server.handle_request()
-    api_key = getattr(server, "api_key", "")
-    returned_base_url = getattr(server, "base_url", base_url)
-    server.server_close()
-
-    if not api_key:
+    owns_login = acquire_login_lock()
+    if not owns_login:
+        api_key = wait_for_login_owner()
+        if api_key:
+            return api_key
         raise SystemExit(
-            "Login timed out. Run this command again and complete the browser sign-in."
+            "Timed out waiting for the active RefreshAgent login. "
+            "Close stale browser login tabs and rerun one RefreshAgent command."
         )
 
-    save_config_api_key(api_key, returned_base_url)
-    print(f"Saved RefreshAgent key to {CONFIG_FILE}", file=sys.stderr)
-    return api_key
+    try:
+        existing_key = load_config_api_key()
+        if existing_key:
+            return existing_key
+
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", 0), CliCallbackHandler)
+        except PermissionError as exc:
+            raise SystemExit(
+                "RefreshAgent login needs to listen on 127.0.0.1 for the OAuth callback, "
+                "but this agent sandbox blocked local socket binding. Rerun the command with "
+                "local network/socket permission approved, or run it once in a normal terminal "
+                f"to create {CONFIG_FILE}."
+            ) from exc
+
+        server.api_key = ""  # type: ignore[attr-defined]
+        server.base_url = base_url  # type: ignore[attr-defined]
+        server.expected_state = secrets.token_urlsafe(24)  # type: ignore[attr-defined]
+        callback_url = (
+            f"http://127.0.0.1:{server.server_port}/callback"
+            f"?state={server.expected_state}"  # type: ignore[attr-defined]
+        )
+        auth_url = build_url(base_url, "/auth/cli", [("callback", callback_url)])
+
+        print("RefreshAgent needs Google access before it can query SEO data.", file=sys.stderr)
+        print(f"Opening login page: {auth_url}", file=sys.stderr)
+        print(
+            "Only one login window is needed. After Google sign-in, this command will save "
+            "the key and continue.",
+            file=sys.stderr,
+        )
+        try:
+            webbrowser.open(auth_url)
+        except Exception:
+            pass
+
+        deadline = time.monotonic() + LOGIN_WAIT_SECONDS
+        while time.monotonic() < deadline and not getattr(server, "api_key", ""):
+            server.timeout = min(10, max(1, int(deadline - time.monotonic())))
+            server.handle_request()
+
+        api_key = getattr(server, "api_key", "")
+        returned_base_url = getattr(server, "base_url", base_url)
+        server.server_close()
+
+        if not api_key:
+            raise SystemExit(
+                "Login timed out before the localhost callback completed. "
+                "Close stale RefreshAgent login tabs, rerun one command, and complete the "
+                "new browser tab within 10 minutes."
+            )
+
+        save_config_api_key(api_key, returned_base_url)
+        print(f"Saved RefreshAgent key to {CONFIG_FILE}", file=sys.stderr)
+        return api_key
+    finally:
+        release_login_lock()
 
 
 def main() -> int:

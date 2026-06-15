@@ -20,6 +20,18 @@ If the user asks about security or data handling, explain:
 - Write endpoints (`POST /api/v1/clients`, `POST /api/v1/proposals/build/*`) only affect the user's RefreshAgent account, not their Google data
 - No data is stored or used for model training
 
+## First-Use Login
+
+Before doing any SEO analysis, check whether the user already has a saved RefreshAgent key by running exactly one lightweight helper command first. Expect this first command to open a browser login if `~/.config/refreshagent/.env` does not exist yet:
+
+```bash
+python3 {skill_dir}/scripts/refreshagent_api.py GET /api/v1/clients --login
+```
+
+If the helper opens a browser, tell the user that RefreshAgent needs one Google sign-in on first use, then wait for the command to finish. Do not investigate missing output as a data/API problem while the login is pending. Do not start Search Console and GA4 discovery in parallel until this first command has completed and saved the key.
+
+After the first command succeeds, continue with resource discovery (`/api/v1/sc/sites`, `/api/v1/ga4/properties`) and the user's requested analysis. Later runs should reuse the saved key and should not open a browser.
+
 ## Authentication
 
 The bundled Python helper reads the API key from `REFRESHAGENT_API_KEY` (env var) or `~/.config/refreshagent/.env` (persistent config). If neither source has a key, the helper starts a localhost callback, opens the RefreshAgent Google login page, saves the returned key to `~/.config/refreshagent/.env`, and then continues the original API request.
@@ -81,12 +93,13 @@ Use `--base-url` only when targeting a non-production RefreshAgent host.
 
 ## Workflow
 
-1. **Identify the data source:** Search Console (`/api/v1/sc/...`), GA4 (`/api/v1/ga4/...`), clients (`/api/v1/clients`), or proposals (`/api/v1/proposals/...`).
-2. **Resolve identifiers:** If the user didn't provide a site URL or GA4 property, list available resources first (`/api/v1/sc/sites`, `/api/v1/ga4/properties`).
-3. **Be specific with dates:** Use explicit date ranges when the user asks about a time period. GSC data lags by 2-3 days — mention that when interpreting recent windows.
-4. **Surface freshness:** Check `cache.cached` and `cache.age_seconds` in responses before presenting data as current.
-5. **Interpret metrics correctly:** GSC `position` is average search position (lower is better); `position_change` is positive when rank improved.
-6. **Summarize in business language:** Give the user actionable insight, but keep enough raw numbers for auditability.
+1. **Run first-use setup:** Run the login/setup command above and wait for it to finish if no saved key is present.
+2. **Identify the data source:** Search Console (`/api/v1/sc/...`), GA4 (`/api/v1/ga4/...`), clients (`/api/v1/clients`), or proposals (`/api/v1/proposals/...`).
+3. **Resolve identifiers:** If the user didn't provide a site URL or GA4 property, list available resources first (`/api/v1/sc/sites`, `/api/v1/ga4/properties`).
+4. **Be specific with dates:** Use explicit date ranges when the user asks about a time period. GSC data lags by 2-3 days — mention that when interpreting recent windows.
+5. **Surface freshness:** Check `cache.cached` and `cache.age_seconds` in responses before presenting data as current.
+6. **Interpret metrics correctly:** GSC `position` is average search position (lower is better); `position_change` is positive when rank improved.
+7. **Summarize in business language:** Give the user actionable insight, but keep enough raw numbers for auditability.
 
 ## Common Endpoints
 
